@@ -1,9 +1,6 @@
 //! The `cargo audit bin` subcommand
 
-use std::{
-    path::PathBuf,
-    process::{ExitCode, exit},
-};
+use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 
@@ -46,11 +43,11 @@ impl BinCommand {
         auditor.set_binary_scan_limits(self.max_binary_size, self.audit_data_size_limit);
         let report = auditor.audit_binaries(&self.binary_paths);
         if report.vulnerabilities_found {
-            exit(1)
+            Ok(ExitCode::from(config.output.failure_exit_code))
         } else if report.errors_encountered {
-            exit(2)
+            Ok(ExitCode::from(config.output.error_exit_code))
         } else {
-            exit(0)
+            Ok(ExitCode::SUCCESS)
         }
     }
 }

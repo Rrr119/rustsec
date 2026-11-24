@@ -11,6 +11,8 @@ warn_unused_ignores = true # warn when an ignored advisory no longer affects the
 ignore = [] # advisory IDs to ignore e.g. ["RUSTSEC-2019-0001", ...]
 informational_warnings = ["unmaintained"] # warn for categories of informational advisories
 severity_threshold = "low" # CVSS severity ("none", "low", "medium", "high", "critical")
+cvss_threshold = 0.0 # optional minimum numeric CVSS base score (0.0-10.0)
+# ignore_file = ".cargo/audit-ignores.txt" # optional file with one ignored advisory ID per line
 
 # Advisory Database Configuration
 [database]
@@ -25,6 +27,9 @@ deny = ["unmaintained"] # exit on error if unmaintained dependencies are found
 format = "terminal" # "terminal" (human readable report) or "json"
 quiet = false # Only print information on error
 show_tree = true # Show inverse dependency trees along with advisories (default: true)
+exit_code_policy = "default" # "default", "strict", or "warn"
+exit_code = 1 # Exit code when the audit policy is violated
+error_exit_code = 2 # Exit code when the audit cannot be completed
 
 # Target Configuration
 [target]

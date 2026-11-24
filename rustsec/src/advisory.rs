@@ -95,6 +95,11 @@ impl Advisory {
         self.metadata.cvss.as_ref().map(|cvss| cvss.severity())
     }
 
+    /// Get the numeric CVSS base score of this advisory, if available
+    pub fn cvss_score(&self) -> Option<f64> {
+        self.metadata.cvss.as_ref().map(|cvss| cvss.score())
+    }
+
     /// Whether the advisory has been withdrawn, i.e. soft-deleted
     pub fn withdrawn(&self) -> bool {
         self.metadata.withdrawn.is_some()

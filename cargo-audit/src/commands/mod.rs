@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{
     auditor::Auditor,
-    config::{AuditConfig, DenyOption, OutputFormat},
+    config::{AuditConfig, DenyOption, ExitCodePolicy, OutputFormat},
     error::{Error, ErrorKind, display_err_with_source},
     lockfile,
     terminal::{ColorChoice, status_err},
@@ -73,6 +73,26 @@ pub struct AuditCommand {
     )]
     pub(crate) ignore: Vec<String>,
 
+    /// Path to a file containing advisory IDs to ignore
+    #[arg(
+        long = "ignore-file",
+        value_name = "PATH",
+        help = "File containing advisory IDs to ignore (one per line or TOML)"
+    )]
+    pub(crate) ignore_file: Option<PathBuf>,
+
+    /// Persist the effective advisory ignore list
+    #[arg(
+        long = "save-ignores",
+        alias = "write-ignores",
+        alias = "persist-ignores",
+        value_name = "PATH",
+        num_args = 0..=1,
+        default_missing_value = ".cargo/audit.toml",
+        help = "Persist ignore rules to PATH (default: .cargo/audit.toml)"
+    )]
+    pub(crate) save_ignores: Option<PathBuf>,
+
     /// Warn about ignored advisories that no longer affect the lockfile
     #[arg(
         long,
@@ -83,6 +103,28 @@ pub struct AuditCommand {
         help = "warn about unused ignore entries when auditing a lockfile (default: true)"
     )]
     pub(crate) warn_unused_ignores: Option<bool>,
+
+    /// Minimum CVSS qualitative severity to report
+    #[arg(
+        long = "severity-threshold",
+        alias = "severity",
+        alias = "min-severity",
+        value_name = "SEVERITY",
+        help = "Minimum CVSS severity to report: none, low, medium, high, critical"
+    )]
+    pub(crate) severity_threshold: Option<rustsec::advisory::Severity>,
+
+    /// Minimum numeric CVSS base score to report
+    #[arg(
+        long = "cvss-threshold",
+        alias = "cvss",
+        alias = "cvss-score",
+        alias = "cvss-score-threshold",
+        alias = "min-cvss-score",
+        value_name = "SCORE",
+        help = "Minimum CVSS base score to report (0.0-10.0)"
+    )]
+    pub(crate) cvss_threshold: Option<f64>,
 
     /// Skip checking for yanked crates
     #[arg(long = "no-yanked", help = "do not check for yanked crates")]
@@ -137,28 +179,68 @@ pub struct AuditCommand {
     /// Output reports as JSON
     #[arg(long = "json", help = "Output report in JSON format")]
     pub(crate) output_json: bool,
+
+    /// Policy for mapping audit findings to the process exit code
+    #[arg(
+        long = "exit-code-policy",
+        alias = "ci-policy",
+        value_name = "POLICY",
+        help = "Exit code policy: default, strict, warn"
+    )]
+    pub(crate) exit_code_policy: Option<ExitCodePolicy>,
+
+    /// Exit code to use when the audit policy is violated
+    #[arg(
+        long = "exit-code",
+        alias = "failure-exit-code",
+        alias = "vulnerability-exit-code",
+        value_name = "CODE",
+        help = "Exit code used when vulnerabilities or denied warnings are found"
+    )]
+    pub(crate) exit_code: Option<u8>,
+
+    /// Exit code to use when the audit cannot be completed
+    #[arg(
+        long = "error-exit-code",
+        alias = "audit-error-exit-code",
+        value_name = "CODE",
+        help = "Exit code used for audit errors"
+    )]
+    pub(crate) error_exit_code: Option<u8>,
 }
 
 impl AuditCommand {
     /// Run the `cargo audit` subcommand with the given configuration
     pub fn run(self, config: AuditConfig) -> Result<ExitCode, Error> {
-        let maybe_path = self.file.as_deref();
-        // It is important to generate the lockfile before initializing the auditor,
-        // otherwise we might deadlock because both need the Cargo package lock
-        let path =
-            lockfile::locate_or_generate(maybe_path).map_err(|e| ErrorKind::Parse.context(e))?;
-        let mut auditor = Auditor::new(&config)?;
-        let report = auditor.audit_lockfile(&path);
-        Ok(match report {
-            Ok(report) => match auditor.should_exit_with_failure(&report) {
-                true => ExitCode::FAILURE,
+        let result = (|| -> Result<ExitCode, Error> {
+            if let Some(target) = &self.save_ignores {
+                crate::config::persist_ignores(
+                    (!target.as_os_str().is_empty()).then_some(target.as_path()),
+                    &config.advisories.ignore,
+                )?;
+            }
+
+            let maybe_path = self.file.as_deref();
+            // It is important to generate the lockfile before initializing the auditor,
+            // otherwise we might deadlock because both need the Cargo package lock
+            let path = lockfile::locate_or_generate(maybe_path)
+                .map_err(|e| ErrorKind::Parse.context(e))?;
+            let mut auditor = Auditor::new(&config)?;
+            let report = auditor.audit_lockfile(&path)?;
+
+            Ok(match auditor.should_exit_with_failure(&report) {
+                true => ExitCode::from(config.output.failure_exit_code),
                 false => ExitCode::SUCCESS,
-            },
+            })
+        })();
+
+        match result {
+            Ok(exit_code) => Ok(exit_code),
             Err(e) => {
                 status_err!("{}", display_err_with_source(&e));
-                ExitCode::from(2)
+                Ok(ExitCode::from(config.output.error_exit_code))
             }
-        })
+        }
     }
 }
 

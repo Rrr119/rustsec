@@ -67,6 +67,10 @@ pub struct Settings {
     /// Severity threshold to alert at
     pub severity: Option<advisory::Severity>,
 
+    /// Minimum numeric CVSS score to alert at
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cvss_threshold: Option<f64>,
+
     /// List of advisory IDs to ignore
     pub ignore: Vec<advisory::Id>,
 
@@ -85,6 +89,10 @@ impl Settings {
 
         if let Some(severity) = self.severity {
             query = query.severity(severity);
+        }
+
+        if let Some(cvss_threshold) = self.cvss_threshold {
+            query = query.cvss_threshold(cvss_threshold);
         }
 
         query

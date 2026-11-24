@@ -1,0 +1,18 @@
+{
+  "uid": "36756",
+  "harness": "Codex CLI",
+  "snapshotUrl": "https://github.com/Rrr119/rustsec/commit/71ba20f78e50efce19cc4a18344eae30e1ffc967",
+  "harnessVersion": "codex-cli 0.167.2",
+  "operatingSystem": "Ubuntu 26.04.1 LTS",
+  "operatingSystemCell": [
+    "MacOS/Linux"
+  ],
+  "outputDirectory": "/home/dev/feedback/uid36756",
+  "wslDistro": "Ubuntu-26.04",
+  "B": {
+    "success": false,
+    "canceled": true,
+    "error": "任务已取消",
+    "side": "B"
+  }
+}

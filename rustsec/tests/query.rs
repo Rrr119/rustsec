@@ -42,6 +42,27 @@ fn matches_severity() {
 }
 
 #[test]
+fn matches_cvss_threshold() {
+    let advisory = load_advisory();
+    assert_eq!(advisory.cvss_score(), Some(10.0));
+
+    let query_matches = Query::new().cvss_threshold(10.0);
+    assert!(query_matches.matches(&advisory));
+
+    let query_nomatch = Query::new().cvss_threshold(10.1);
+    assert!(!query_nomatch.matches(&advisory));
+}
+
+#[test]
+fn advisories_without_cvss_match_any_threshold() {
+    let mut advisory = load_advisory();
+    advisory.metadata.cvss = None;
+
+    let query = Query::new().cvss_threshold(10.0);
+    assert!(query.matches(&advisory));
+}
+
+#[test]
 fn matches_target_os() {
     let advisory = load_advisory();
 

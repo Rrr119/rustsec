@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid36756",
+  "B": "/home/dev/feedback/uid36756",
+  "sha": "71ba20f78e50efce19cc4a18344eae30e1ffc967",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "RustSec",
+    "repo": "rustsec",
+    "sha": "71ba20f78e50efce19cc4a18344eae30e1ffc967"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "rustsec",
+    "cloneUrl": "https://github.com/Rrr119/rustsec.git"
+  },
+  "at": "2026-11-24T03:33:51.500Z"
+}

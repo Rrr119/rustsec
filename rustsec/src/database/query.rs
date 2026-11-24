@@ -26,6 +26,9 @@ pub struct Query {
     /// Severity threshold (i.e. minimum severity)
     severity: Option<Severity>,
 
+    /// Minimum CVSS score
+    cvss_threshold: Option<f64>,
+
     /// Target architecture
     target_arch: Vec<String>,
 
@@ -61,6 +64,7 @@ impl Query {
             package_version: None,
             package_source: None,
             severity: None,
+            cvss_threshold: None,
             target_arch: Default::default(),
             target_os: Default::default(),
             year: None,
@@ -121,6 +125,16 @@ impl Query {
     /// match regardless of what this is set to.
     pub fn severity(mut self, severity: Severity) -> Self {
         self.severity = Some(severity);
+        self
+    }
+
+    /// Set a minimum numeric CVSS base score threshold.
+    ///
+    /// Advisories without CVSS information are not filtered out by this
+    /// setting. Values outside of `0.0..=10.0` are accepted by the query
+    /// builder but callers should validate them before use.
+    pub fn cvss_threshold(mut self, threshold: f64) -> Self {
+        self.cvss_threshold = Some(threshold);
         self
     }
 
@@ -196,6 +210,13 @@ impl Query {
         if let Some(severity_threshold) = self.severity
             && let Some(advisory_severity) = advisory.severity()
             && advisory_severity < severity_threshold
+        {
+            return false;
+        }
+
+        if let Some(cvss_threshold) = self.cvss_threshold
+            && let Some(cvss_score) = advisory.cvss_score()
+            && cvss_score < cvss_threshold
         {
             return false;
         }

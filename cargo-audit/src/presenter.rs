@@ -19,7 +19,7 @@ use rustsec::{advisory::affected::FunctionPath, binary_scanning::BinaryReport};
 #[cfg(feature = "binary-scanning")]
 use crate::binary_scanning::SymbolSet;
 use crate::{
-    config::{DenyOption, OutputConfig, OutputFormat},
+    config::{DenyOption, ExitCodePolicy, OutputConfig, OutputFormat},
     terminal::{
         self,
         Color::{self, Red, Yellow},
@@ -117,9 +117,10 @@ impl Presenter {
 
     /// Mark warnings denied by the configured policy.
     pub(crate) fn mark_denied_warnings(&self, report: &mut rustsec::Report) {
+        let deny_all = self.config.exit_code_policy == ExitCodePolicy::Strict;
         for (kind, warnings) in &mut report.warnings {
             for warning in warnings {
-                warning.denied = self.deny_warning_kinds.contains(kind);
+                warning.denied = deny_all || self.deny_warning_kinds.contains(kind);
             }
         }
     }
@@ -333,6 +334,9 @@ impl Presenter {
     /// such as --deny=warnings
     #[must_use]
     pub fn should_exit_with_failure(&self, report: &rustsec::Report) -> bool {
+        if self.config.exit_code_policy == ExitCodePolicy::Warn {
+            return false;
+        }
         if report.vulnerabilities.found {
             return true;
         }
@@ -347,12 +351,29 @@ impl Presenter {
         &self,
         self_advisories: &[rustsec::Advisory],
     ) -> bool {
-        !self_advisories.is_empty() && self.config.deny.contains(&DenyOption::Warnings)
+        if self_advisories.is_empty() {
+            return false;
+        }
+
+        match self.config.exit_code_policy {
+            ExitCodePolicy::Default => self.config.deny.contains(&DenyOption::Warnings),
+            ExitCodePolicy::Strict => true,
+            ExitCodePolicy::Warn => false,
+        }
     }
 
     /// Count up the warnings, sorting into denied and allowed.
     /// Returns `(denied, allowed)`
     fn count_warnings(&self, report: &rustsec::Report) -> (u64, u64) {
+        if self.config.exit_code_policy == ExitCodePolicy::Strict {
+            let total = report
+                .warnings
+                .values()
+                .map(|warnings| warnings.len() as u64)
+                .sum();
+            return (total, 0);
+        }
+
         let mut num_denied: u64 = 0;
         let mut num_not_denied: u64 = 0;
 

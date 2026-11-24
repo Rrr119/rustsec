@@ -1,6 +1,11 @@
 //! The configuration file
 
-use std::{fs, path::PathBuf, str::FromStr};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use rustsec::{WarningKind, advisory, report};
 use serde::{Deserialize, Serialize};
@@ -70,6 +75,18 @@ impl AuditConfig {
             None => Self::default(),
         };
 
+        if let Some(cvss_threshold) = config.advisories.cvss_threshold {
+            validate_cvss_threshold(cvss_threshold)?;
+        }
+
+        if let Some(ignore_file) = config.advisories.ignore_file.clone() {
+            let ignore_file = resolve_ignore_file(&ignore_file);
+            config
+                .advisories
+                .ignore
+                .extend(load_ignore_file(&ignore_file)?);
+        }
+
         config.apply(cli)?;
         Ok(config)
     }
@@ -90,6 +107,21 @@ impl AuditConfig {
 
         if let Some(warn) = cli.warn_unused_ignores {
             self.advisories.warn_unused_ignores = warn;
+        }
+
+        if let Some(severity) = cli.severity_threshold {
+            self.advisories.severity_threshold = Some(severity);
+        }
+
+        if let Some(cvss_threshold) = cli.cvss_threshold {
+            validate_cvss_threshold(cvss_threshold)?;
+            self.advisories.cvss_threshold = Some(cvss_threshold);
+        }
+
+        if let Some(ignore_file) = &cli.ignore_file {
+            self.advisories
+                .ignore
+                .extend(load_ignore_file(&resolve_ignore_file(ignore_file))?);
         }
 
         self.database.fetch &= !cli.no_fetch;
@@ -131,6 +163,23 @@ impl AuditConfig {
             self.yanked.enabled = false;
         }
 
+        if let Some(policy) = cli.exit_code_policy {
+            self.output.exit_code_policy = policy;
+        }
+
+        if let Some(code) = cli.exit_code {
+            self.output.failure_exit_code = code;
+        }
+
+        if let Some(code) = cli.error_exit_code {
+            self.output.error_exit_code = code;
+        }
+
+        let mut seen = HashSet::new();
+        self.advisories
+            .ignore
+            .retain(|advisory_id| seen.insert(advisory_id.clone()));
+
         Ok(())
     }
 
@@ -139,6 +188,7 @@ impl AuditConfig {
         let mut settings = report::Settings {
             ignore: self.advisories.ignore.clone(),
             severity: self.advisories.severity_threshold,
+            cvss_threshold: self.advisories.cvss_threshold,
             target_arch: self.target.arch(),
             target_os: self.target.os(),
             ..Default::default()
@@ -210,6 +260,21 @@ pub struct AdvisoryConfig {
     /// Vulnerabilities with explicit CVSS info which have a severity below
     /// this threshold will be ignored.
     pub severity_threshold: Option<advisory::Severity>,
+
+    /// Numeric CVSS base score threshold to alert at.
+    ///
+    /// Vulnerabilities with explicit CVSS info which have a score below this
+    /// threshold will be ignored. This can be combined with
+    /// `severity_threshold`.
+    #[serde(default, alias = "cvss_score_threshold")]
+    pub cvss_threshold: Option<f64>,
+
+    /// Optional file containing additional advisory IDs to ignore.
+    ///
+    /// The file can contain one ID per line, or TOML with a top-level
+    /// `ignore` array or an `[advisories]` table containing `ignore`.
+    #[serde(default)]
+    pub ignore_file: Option<PathBuf>,
 }
 
 impl Default for AdvisoryConfig {
@@ -219,6 +284,8 @@ impl Default for AdvisoryConfig {
             warn_unused_ignores: true,
             informational_warnings: None,
             severity_threshold: None,
+            cvss_threshold: None,
+            ignore_file: None,
         }
     }
 }
@@ -284,11 +351,28 @@ pub struct OutputConfig {
     pub format: OutputFormat,
 
     /// Enable quiet mode
+    #[serde(default)]
     pub quiet: bool,
 
     /// Show inverse dependency trees along with advisories (default: true)
     #[serde(default = "default_show_tree")]
     pub show_tree: bool,
+
+    /// How findings should be mapped to the process exit code
+    #[serde(default)]
+    pub exit_code_policy: ExitCodePolicy,
+
+    /// Exit code used when the configured policy is violated
+    #[serde(
+        default = "default_failure_exit_code",
+        alias = "exit_code",
+        alias = "vulnerability_exit_code"
+    )]
+    pub failure_exit_code: u8,
+
+    /// Exit code used when the audit cannot be completed
+    #[serde(default = "default_error_exit_code", alias = "audit_error_exit_code")]
+    pub error_exit_code: u8,
 }
 
 impl OutputConfig {
@@ -305,12 +389,70 @@ impl Default for OutputConfig {
             format: OutputFormat::default(),
             quiet: false,
             show_tree: default_show_tree(),
+            exit_code_policy: ExitCodePolicy::default(),
+            failure_exit_code: default_failure_exit_code(),
+            error_exit_code: default_error_exit_code(),
         }
     }
 }
 
 fn default_show_tree() -> bool {
     true
+}
+
+fn default_failure_exit_code() -> u8 {
+    1
+}
+
+fn default_error_exit_code() -> u8 {
+    2
+}
+
+/// Policy for mapping audit findings to a process exit code.
+#[derive(Default, Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExitCodePolicy {
+    /// Fail on vulnerabilities and explicitly denied warnings
+    #[default]
+    #[serde(
+        alias = "fail",
+        alias = "block",
+        alias = "deny",
+        alias = "enforce",
+        alias = "error"
+    )]
+    Default,
+
+    /// Fail on vulnerabilities and every warning, even if it was not denied
+    #[serde(alias = "all")]
+    Strict,
+
+    /// Report findings but never fail because of them
+    #[serde(
+        alias = "warning",
+        alias = "warn-only",
+        alias = "none",
+        alias = "never",
+        alias = "ignore",
+        alias = "allow",
+        alias = "pass",
+        alias = "success"
+    )]
+    Warn,
+}
+
+impl FromStr for ExitCodePolicy {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s.to_ascii_lowercase().as_str() {
+            "default" | "fail" | "block" | "deny" | "enforce" | "error" => Ok(Self::Default),
+            "strict" | "all" => Ok(Self::Strict),
+            "warn" | "warning" | "warn-only" | "none" | "never" | "ignore" | "allow" | "pass"
+            | "success" => Ok(Self::Warn),
+            other => Err(ErrorKind::Parse.context(format!("invalid exit code policy: {other}"))),
+        }
+    }
 }
 
 /// Warning kinds
@@ -481,3 +623,138 @@ fn default_true() -> bool {
 ///
 /// This file allows setting some default auditing options.
 const CONFIG_FILE: &str = "audit.toml";
+
+/// Validate a numeric CVSS threshold.
+pub fn validate_cvss_threshold(threshold: f64) -> Result<(), Error> {
+    if threshold.is_nan() || !(0.0..=10.0).contains(&threshold) {
+        return Err(ErrorKind::Config.context(format!(
+            "CVSS threshold must be between 0.0 and 10.0, got {threshold}"
+        )));
+    }
+    Ok(())
+}
+
+/// Load advisory IDs from an ignore file.
+///
+/// Files may contain one advisory ID per line, or TOML with a top-level
+/// `ignore` array or an `[advisories]` table containing `ignore`.
+pub fn load_ignore_file(path: &Path) -> Result<Vec<advisory::Id>, Error> {
+    let text = fs::read_to_string(path).map_err(|e| {
+        ErrorKind::Config.context(format!("couldn't read ignore file {}: {e}", path.display()))
+    })?;
+
+    #[derive(Debug, Default, Deserialize)]
+    struct IgnoreFile {
+        #[serde(default)]
+        ignore: Vec<advisory::Id>,
+        advisories: Option<IgnoreSection>,
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    struct IgnoreSection {
+        #[serde(default)]
+        ignore: Vec<advisory::Id>,
+    }
+
+    if let Ok(ignore_file) = toml::from_str::<IgnoreFile>(&text) {
+        let mut ids = ignore_file.ignore;
+        if let Some(advisories) = ignore_file.advisories {
+            ids.extend(advisories.ignore);
+        }
+        return Ok(ids);
+    }
+
+    let mut ids = Vec::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or_default();
+        for token in line.split(|c: char| c == ',' || c.is_whitespace()) {
+            if token.is_empty() {
+                continue;
+            }
+            ids.push(token.parse().map_err(|e| ErrorKind::Parse.context(e))?);
+        }
+    }
+    Ok(ids)
+}
+
+/// Persist ignore rules so they are used by subsequent audits.
+///
+/// If `target` is `None` or empty, the project-local `.cargo/audit.toml` is
+/// updated. Files ending in `.toml` are treated as audit configuration files,
+/// while other paths are written as a plain list of advisory IDs.
+pub fn persist_ignores(target: Option<&Path>, ignores: &[advisory::Id]) -> Result<PathBuf, Error> {
+    let path = match target {
+        Some(target) if !target.as_os_str().is_empty() => target.to_path_buf(),
+        _ => PathBuf::from(".cargo").join(CONFIG_FILE),
+    };
+
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|e| {
+            ErrorKind::Io.context(format!(
+                "couldn't create directory {}: {e}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    if path
+        .extension()
+        .is_some_and(|extension| extension == "toml")
+    {
+        persist_ignores_to_config(&path, ignores)?;
+    } else {
+        let mut contents = ignores
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !contents.is_empty() {
+            contents.push('\n');
+        }
+        fs::write(&path, contents).map_err(|e| {
+            ErrorKind::Io.context(format!("couldn't write {}: {e}", path.display()))
+        })?;
+    }
+
+    Ok(path)
+}
+
+fn persist_ignores_to_config(path: &Path, ignores: &[advisory::Id]) -> Result<(), Error> {
+    let existing = if path.exists() {
+        fs::read_to_string(path).map_err(|e| {
+            ErrorKind::Config.context(format!("couldn't read {}: {e}", path.display()))
+        })?
+    } else {
+        String::new()
+    };
+
+    let mut document = existing
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| ErrorKind::Parse.context(e))?;
+
+    let advisories = document
+        .entry("advisories")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    let advisories = advisories
+        .as_table_mut()
+        .ok_or_else(|| ErrorKind::Config.context("`advisories` in audit.toml must be a table"))?;
+
+    let mut array = toml_edit::Array::new();
+    for id in ignores {
+        array.push(id.to_string());
+    }
+    advisories.insert("ignore", toml_edit::value(array));
+
+    fs::write(path, document.to_string())
+        .map_err(|e| ErrorKind::Io.context(format!("couldn't write {}: {e}", path.display())))
+}
+
+fn resolve_ignore_file(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        PathBuf::from(".").join(path)
+    }
+}

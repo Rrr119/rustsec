@@ -116,6 +116,56 @@ $ cargo audit --ignore RUSTSEC-2017-0001
 
 This option can also be configured via the [`audit.toml`](./audit.toml.example) file.
 
+To persist the current ignore list, pass `--save-ignores`:
+
+```
+$ cargo audit --ignore RUSTSEC-2017-0001 --save-ignores
+```
+
+This updates `.cargo/audit.toml`. You can also keep waivers in a separate file
+and load them with `--ignore-file`; the file may contain one advisory ID per
+line or a TOML `ignore` array:
+
+```
+$ cargo audit --ignore-file .cargo/audit-ignores.txt
+```
+
+## Severity gating
+
+Use `--severity-threshold` for the CVSS qualitative rating, or
+`--cvss-threshold` for the numeric base score. Advisories below the configured
+threshold are filtered out of the report and do not fail CI. Advisories
+without CVSS metadata are retained, since their severity is unknown.
+
+```
+$ cargo audit --severity-threshold high
+$ cargo audit --cvss-threshold 7.0
+```
+
+The same settings can be placed in [`audit.toml`](./audit.toml.example):
+
+```toml
+[advisories]
+severity_threshold = "high"
+cvss_threshold = 7.0
+ignore = ["RUSTSEC-2017-0001"]
+```
+
+## CI exit code policy
+
+`--exit-code-policy` controls when findings fail the process:
+
+- `default`: fail for vulnerabilities and warnings explicitly denied with `--deny`.
+- `strict`: fail for vulnerabilities and any warning, even if not denied.
+- `warn`: report findings but exit successfully.
+
+Use `--exit-code` and `--error-exit-code` to choose the CI exit codes for policy
+violations and audit errors:
+
+```
+$ cargo audit --cvss-threshold 7.0 --exit-code 10 --error-exit-code 11
+```
+
 ## Filtering by target platform
 
 Use `--target-arch` and `--target-os` to filter advisories by CPU architecture
